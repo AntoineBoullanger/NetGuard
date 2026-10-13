@@ -506,13 +506,17 @@ class NetGuardDashboard(QMainWindow):
         # UPDATE GRAPH
 
         if self.monitoring:
-
-            self.time_history.append(
-                len(self.time_history) + 1
-            )
-
             self.download_history.append(self.download_speed)
             self.upload_history.append(self.upload_speed)
+
+            if not hasattr(self, "sample_count"):
+                self.sample_count = 0
+
+            self.sample_count += 1
+            self.time_history.append(self.sample_count)
+
+            if len(self.time_history) > 30:
+                self.time_history.popleft()
 
         self.ax.clear()
         self.ax.set_facecolor("#111827")
@@ -584,6 +588,7 @@ class NetGuardDashboard(QMainWindow):
         self.download_history.clear()
         self.upload_history.clear()
         self.time_history.clear()
+        self.sample_count = 0
 
         self.status_label.setText("● MONITORING")
 
