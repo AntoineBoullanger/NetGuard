@@ -7,16 +7,19 @@ import psutil
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
-    QHeaderView,
 )
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -26,6 +29,7 @@ from app.network.monitor import (
     get_network_stats,
     get_network_connections,
 )
+from app.detection.rules import detect_suspicious_connections
 
 
 class NetGuardDashboard(QMainWindow):
@@ -35,7 +39,7 @@ class NetGuardDashboard(QMainWindow):
 
         self.setWindowTitle("NetGuard | Network Security")
         self.resize(1400, 850)
-        self.setMinimumSize(1000, 650)
+        self.setMinimumSize(1050, 700)
 
         self.monitoring = False
         self.previous_stats = None
@@ -47,20 +51,31 @@ class NetGuardDashboard(QMainWindow):
         self.download_history = deque(maxlen=30)
         self.upload_history = deque(maxlen=30)
         self.time_history = deque(maxlen=30)
+        self.sample_count = 0
+
+        self.refresh_interval = 2000
+
+        self.nav_buttons = {}
+        self.page_titles = {
+            "Dashboard": "Network Dashboard",
+            "Network Connections": "Network Connections",
+            "Security Alerts": "Security Alerts",
+            "Settings": "Settings",
+        }
 
         self.timer = QTimer(self)
-        self.timer.setInterval(2000)
+        self.timer.setInterval(self.refresh_interval)
         self.timer.timeout.connect(self.refresh_dashboard)
 
         self.setup_ui()
         self.refresh_dashboard()
+        self.switch_page("Dashboard")
 
-    # --------------------------------------------------
+    # ==================================================
     # INTERFACE
-    # --------------------------------------------------
+    # ==================================================
 
     def setup_ui(self):
-
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
@@ -68,35 +83,44 @@ class NetGuardDashboard(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # SIDEBAR
+        # ---------------- SIDEBAR ----------------
 
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
         sidebar.setFixedWidth(235)
 
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(20, 25, 20, 20)
-        sidebar_layout.setSpacing(18)
+        sidebar_layout.setContentsMargins(18, 25, 18, 20)
+        sidebar_layout.setSpacing(12)
 
         logo = QLabel("NETGUARD")
         logo.setObjectName("logo")
 
-        subtitle = QLabel("N E T W O R K   S E C U R I T Y")
+        subtitle = QLabel("NETWORK SECURITY")
         subtitle.setObjectName("sidebarSubtitle")
 
         sidebar_layout.addWidget(logo)
         sidebar_layout.addWidget(subtitle)
-        sidebar_layout.addSpacing(35)
+        sidebar_layout.addSpacing(28)
 
-        for item in [
+        navigation_items = [
             "Dashboard",
             "Network Connections",
             "Security Alerts",
             "Settings",
-        ]:
-            label = QLabel(item)
-            label.setObjectName("sidebarItem")
-            sidebar_layout.addWidget(label)
+        ]
+
+        for item in navigation_items:
+            button = QPushButton(item)
+            button.setObjectName("navButton")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setCheckable(True)
+            button.clicked.connect(
+                lambda checked=False, page=item: self.switch_page(page)
+            )
+
+            sidebar_layout.addWidget(button)
+            self.nav_buttons[item] = button
 
         sidebar_layout.addStretch()
 
@@ -106,41 +130,69 @@ class NetGuardDashboard(QMainWindow):
 
         main_layout.addWidget(sidebar)
 
-        # MAIN CONTENT
+        # ---------------- MAIN AREA ----------------
 
-        content = QWidget()
-        content.setObjectName("content")
+        main_area = QWidget()
+        main_area.setObjectName("mainArea")
 
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(20, 15, 20, 10)
-        content_layout.setSpacing(10)
+        main_area_layout = QVBoxLayout(main_area)
+        main_area_layout.setContentsMargins(25, 20, 25, 20)
+        main_area_layout.setSpacing(15)
 
-        main_layout.addWidget(content, 1)
-
-        # HEADER
+        # Shared header
 
         header_layout = QHBoxLayout()
 
-        title = QLabel("Network Dashboard")
-        title.setObjectName("pageTitle")
+        self.page_title = QLabel("Network Dashboard")
+        self.page_title.setObjectName("pageTitle")
 
         self.status_label = QLabel("● STOPPED")
         self.status_label.setObjectName("statusLabel")
 
-        header_layout.addWidget(title)
+        header_layout.addWidget(self.page_title)
         header_layout.addStretch()
         header_layout.addWidget(self.status_label)
 
-        content_layout.addLayout(header_layout)
+        main_area_layout.addLayout(header_layout)
 
-        description = QLabel(
+        self.page_description = QLabel(
             "Monitor your network activity in real time."
         )
-        description.setObjectName("description")
+        self.page_description.setObjectName("description")
 
-        content_layout.addWidget(description)
+        main_area_layout.addWidget(self.page_description)
 
-        # STATISTICS CARDS
+        # Page container
+
+        self.pages = QStackedWidget()
+        self.pages.setObjectName("pages")
+
+        self.dashboard_page = self.create_dashboard_page()
+        self.connections_page = self.create_connections_page()
+        self.alerts_page = self.create_alerts_page()
+        self.settings_page = self.create_settings_page()
+
+        self.pages.addWidget(self.dashboard_page)
+        self.pages.addWidget(self.connections_page)
+        self.pages.addWidget(self.alerts_page)
+        self.pages.addWidget(self.settings_page)
+
+        main_area_layout.addWidget(self.pages, 1)
+        main_layout.addWidget(main_area, 1)
+
+        self.apply_styles()
+
+    # ==================================================
+    # DASHBOARD PAGE
+    # ==================================================
+
+    def create_dashboard_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 5, 0, 0)
+        layout.setSpacing(15)
+
+        # Statistics cards
 
         cards_layout = QHBoxLayout()
         cards_layout.setSpacing(12)
@@ -160,16 +212,16 @@ class NetGuardDashboard(QMainWindow):
         ]
 
         for title_text, value_label in cards:
-
             card = QFrame()
             card.setObjectName("statCard")
 
             card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(12, 12, 12, 12)
-            card_layout.setSpacing(6)
+            card_layout.setContentsMargins(12, 14, 12, 14)
+            card_layout.setSpacing(10)
 
             card_title = QLabel(title_text)
             card_title.setObjectName("cardTitle")
+            card_title.setWordWrap(True)
 
             value_label.setObjectName("cardValue")
 
@@ -178,12 +230,11 @@ class NetGuardDashboard(QMainWindow):
 
             cards_layout.addWidget(card)
 
-        content_layout.addLayout(cards_layout)
+        layout.addLayout(cards_layout)
 
-        # MONITORING BUTTONS
+        # Monitoring controls
 
-        buttons_layout = QHBoxLayout()
-        buttons_layout.setSpacing(10)
+        controls_layout = QHBoxLayout()
 
         self.start_button = QPushButton("Start Monitoring")
         self.start_button.setObjectName("startButton")
@@ -194,23 +245,72 @@ class NetGuardDashboard(QMainWindow):
         self.stop_button.clicked.connect(self.stop_monitoring)
         self.stop_button.setEnabled(False)
 
-        buttons_layout.addWidget(self.start_button)
-        buttons_layout.addWidget(self.stop_button)
-        buttons_layout.addStretch()
+        controls_layout.addWidget(self.start_button)
+        controls_layout.addWidget(self.stop_button)
+        controls_layout.addStretch()
 
-        content_layout.addLayout(buttons_layout)
+        layout.addLayout(controls_layout)
 
-        # CONNECTIONS TITLE
+        # Traffic graph
 
-        connections_title = QLabel("Network Connections")
-        connections_title.setObjectName("sectionTitle")
+        graph_frame = QFrame()
+        graph_frame.setObjectName("panel")
 
-        content_layout.addWidget(connections_title)
+        graph_layout = QVBoxLayout(graph_frame)
+        graph_layout.setContentsMargins(15, 12, 15, 12)
 
-        # CONNECTIONS TABLE
+        graph_title = QLabel("Network Traffic")
+        graph_title.setObjectName("sectionTitle")
+        graph_layout.addWidget(graph_title)
+
+        self.figure = Figure(figsize=(8, 4))
+        self.figure.patch.set_facecolor("#111827")
+
+        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.canvas.setMinimumHeight(250)
+
+        self.ax = self.figure.add_subplot(111)
+        self.configure_graph()
+
+        graph_layout.addWidget(self.canvas)
+
+        layout.addWidget(graph_frame, 1)
+
+        # Recent alerts summary
+
+        summary_title = QLabel("Security Overview")
+        summary_title.setObjectName("sectionTitle")
+        layout.addWidget(summary_title)
+
+        self.alert_summary = QLabel(
+            "No security alerts have been analyzed yet."
+        )
+        self.alert_summary.setObjectName("summaryLabel")
+        self.alert_summary.setWordWrap(True)
+
+        layout.addWidget(self.alert_summary)
+
+        return page
+
+    # ==================================================
+    # CONNECTIONS PAGE
+    # ==================================================
+
+    def create_connections_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 5, 0, 0)
+        layout.setSpacing(12)
+
+        description = QLabel(
+            "Detailed view of the network connections visible to NetGuard."
+        )
+        description.setObjectName("description")
+        description.setWordWrap(True)
+
+        layout.addWidget(description)
 
         self.table = QTableWidget()
-
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels([
             "Protocol",
@@ -220,69 +320,184 @@ class NetGuardDashboard(QMainWindow):
             "Process ID",
         ])
 
-        self.table.setAlternatingRowColors(True)
-        self.table.setEditTriggers(
+        self.configure_table(self.table)
+        layout.addWidget(self.table)
+
+        self.connection_count_label = QLabel("0 connections")
+        self.connection_count_label.setObjectName("summaryLabel")
+        layout.addWidget(self.connection_count_label)
+
+        return page
+
+    # ==================================================
+    # SECURITY ALERTS PAGE
+    # ==================================================
+
+    def create_alerts_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 5, 0, 0)
+        layout.setSpacing(12)
+
+        description = QLabel(
+            "Connections matching the configured detection rules. "
+            "An alert is an indication to investigate, not proof of an attack."
+        )
+        description.setObjectName("description")
+        description.setWordWrap(True)
+
+        layout.addWidget(description)
+
+        self.alerts_table = QTableWidget()
+        self.alerts_table.setColumnCount(4)
+        self.alerts_table.setHorizontalHeaderLabels([
+            "Time",
+            "Severity",
+            "Detection Rule",
+            "Details",
+        ])
+
+        self.configure_table(self.alerts_table)
+        layout.addWidget(self.alerts_table)
+
+        self.alert_count_label = QLabel("0 alerts")
+        self.alert_count_label.setObjectName("summaryLabel")
+        layout.addWidget(self.alert_count_label)
+
+        return page
+
+    # ==================================================
+    # SETTINGS PAGE
+    # ==================================================
+
+    def create_settings_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 5, 0, 0)
+        layout.setSpacing(18)
+
+        title = QLabel("Monitoring Settings")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+
+        description = QLabel(
+            "Configure how often NetGuard refreshes network information."
+        )
+        description.setObjectName("description")
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        settings_panel = QFrame()
+        settings_panel.setObjectName("panel")
+
+        settings_layout = QVBoxLayout(settings_panel)
+        settings_layout.setContentsMargins(20, 20, 20, 20)
+        settings_layout.setSpacing(15)
+
+        interval_label = QLabel("Refresh interval")
+        interval_label.setObjectName("settingLabel")
+        settings_layout.addWidget(interval_label)
+
+        self.interval_combo = QComboBox()
+        self.interval_combo.addItem("1 second", 1000)
+        self.interval_combo.addItem("2 seconds", 2000)
+        self.interval_combo.addItem("5 seconds", 5000)
+        self.interval_combo.addItem("10 seconds", 10000)
+        self.interval_combo.setCurrentIndex(1)
+
+        settings_layout.addWidget(self.interval_combo)
+
+        save_button = QPushButton("Apply Settings")
+        save_button.setObjectName("startButton")
+        save_button.clicked.connect(self.apply_settings)
+
+        settings_layout.addWidget(save_button)
+        settings_layout.addStretch()
+
+        layout.addWidget(settings_panel)
+        layout.addStretch()
+
+        return page
+
+    # ==================================================
+    # NAVIGATION
+    # ==================================================
+
+    def switch_page(self, page_name):
+        page_indexes = {
+            "Dashboard": 0,
+            "Network Connections": 1,
+            "Security Alerts": 2,
+            "Settings": 3,
+        }
+
+        if page_name not in page_indexes:
+            return
+
+        self.pages.setCurrentIndex(page_indexes[page_name])
+        self.page_title.setText(self.page_titles[page_name])
+
+        descriptions = {
+            "Dashboard": "Monitor your network activity in real time.",
+            "Network Connections": "Inspect visible TCP and UDP connections.",
+            "Security Alerts": "Review connections flagged by detection rules.",
+            "Settings": "Configure NetGuard monitoring preferences.",
+        }
+
+        self.page_description.setText(descriptions[page_name])
+
+        for name, button in self.nav_buttons.items():
+            button.setChecked(name == page_name)
+
+    # ==================================================
+    # TABLE CONFIGURATION
+    # ==================================================
+
+    @staticmethod
+    def configure_table(table):
+        table.setAlternatingRowColors(True)
+        table.setEditTriggers(
             QTableWidget.EditTrigger.NoEditTriggers
         )
-        self.table.setSelectionBehavior(
+        table.setSelectionBehavior(
             QTableWidget.SelectionBehavior.SelectRows
         )
-
-        self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(25)
-
-        self.table.horizontalHeader().setSectionResizeMode(
+        table.setSelectionMode(
+            QTableWidget.SelectionMode.SingleSelection
+        )
+        table.verticalHeader().setVisible(False)
+        table.verticalHeader().setDefaultSectionSize(32)
+        table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
         )
 
-        self.table.setMaximumHeight(230)
-        self.table.setMinimumHeight(130)
+    # ==================================================
+    # GRAPH
+    # ==================================================
 
-        content_layout.addWidget(self.table)
-
-        # NETWORK TRAFFIC GRAPH
-
-        self.figure = Figure(figsize=(8, 2.5))
-        self.figure.patch.set_facecolor("#111827")
-
-        self.canvas = FigureCanvasQTAgg(self.figure)
-        self.canvas.setMinimumHeight(150)
-
-        self.ax = self.figure.add_subplot(111)
-
+    def configure_graph(self):
         self.ax.set_facecolor("#111827")
         self.ax.set_title(
             "Network Traffic",
             color="#f8fafc",
-            pad=8,
+            pad=10,
         )
-        self.ax.set_xlabel(
-            "Recent samples",
-            color="#94a3b8",
-        )
-        self.ax.set_ylabel(
-            "KB/s",
-            color="#94a3b8",
-        )
+        self.ax.set_xlabel("Recent samples", color="#94a3b8")
+        self.ax.set_ylabel("KB/s", color="#94a3b8")
         self.ax.tick_params(colors="#94a3b8")
         self.ax.grid(True, alpha=0.2)
 
-        content_layout.addWidget(self.canvas, 1)
-
-        self.apply_styles()
-
-    # --------------------------------------------------
+    # ==================================================
     # STYLES
-    # --------------------------------------------------
+    # ==================================================
 
     def apply_styles(self):
-
         self.setStyleSheet("""
             QMainWindow {
                 background-color: #0b1120;
             }
 
-            QWidget#content {
+            QWidget#mainArea {
                 background-color: #0b1120;
             }
 
@@ -300,17 +515,34 @@ class NetGuardDashboard(QMainWindow):
             QLabel#sidebarSubtitle {
                 color: #94a3b8;
                 font-size: 10px;
-            }
-
-            QLabel#sidebarItem {
-                color: #dbeafe;
-                font-size: 13px;
-                padding: 8px 0;
+                letter-spacing: 2px;
             }
 
             QLabel#version {
                 color: #64748b;
                 font-size: 10px;
+            }
+
+            QPushButton#navButton {
+                background-color: transparent;
+                color: #cbd5e1;
+                border: none;
+                border-radius: 7px;
+                text-align: left;
+                padding: 13px 12px;
+                font-size: 13px;
+            }
+
+            QPushButton#navButton:hover {
+                background-color: #1e293b;
+                color: #f8fafc;
+            }
+
+            QPushButton#navButton:checked {
+                background-color: #075985;
+                color: #ffffff;
+                font-weight: bold;
+                border-left: 3px solid #38bdf8;
             }
 
             QLabel#pageTitle {
@@ -322,18 +554,18 @@ class NetGuardDashboard(QMainWindow):
             QLabel#description {
                 color: #94a3b8;
                 font-size: 13px;
-                padding-bottom: 2px;
             }
 
             QLabel#statusLabel {
                 color: #fbbf24;
                 font-weight: bold;
+                padding: 8px;
             }
 
-            QFrame#statCard {
+            QFrame#statCard, QFrame#panel {
                 background-color: #162133;
                 border: 1px solid #273449;
-                border-radius: 10px;
+                border-radius: 9px;
             }
 
             QLabel#cardTitle {
@@ -352,7 +584,32 @@ class NetGuardDashboard(QMainWindow):
                 color: #f8fafc;
                 font-size: 17px;
                 font-weight: bold;
-                padding-top: 2px;
+            }
+
+            QLabel#summaryLabel {
+                color: #94a3b8;
+                padding: 5px;
+            }
+
+            QLabel#settingLabel {
+                color: #e2e8f0;
+                font-size: 14px;
+                font-weight: bold;
+            }
+
+            QComboBox {
+                background-color: #111827;
+                color: #e2e8f0;
+                border: 1px solid #334155;
+                border-radius: 5px;
+                padding: 9px;
+                min-width: 180px;
+            }
+
+            QComboBox QAbstractItemView {
+                background-color: #111827;
+                color: #e2e8f0;
+                selection-background-color: #075985;
             }
 
             QTableWidget {
@@ -368,7 +625,7 @@ class NetGuardDashboard(QMainWindow):
             QHeaderView::section {
                 background-color: #1e293b;
                 color: #94a3b8;
-                padding: 8px;
+                padding: 9px;
                 border: none;
                 font-weight: bold;
             }
@@ -396,23 +653,25 @@ class NetGuardDashboard(QMainWindow):
                 border: 1px solid #334155;
             }
 
+            QPushButton#stopButton:hover {
+                background-color: #334155;
+            }
+
             QPushButton:disabled {
                 color: #64748b;
                 background-color: #263449;
             }
         """)
 
-    # --------------------------------------------------
+    # ==================================================
     # HELPERS
-    # --------------------------------------------------
+    # ==================================================
 
     @staticmethod
     def format_bytes(size):
-
         value = float(size)
 
         for unit in ["B", "KB", "MB", "GB", "TB"]:
-
             if value < 1024 or unit == "TB":
                 if unit == "B":
                     return f"{value:.0f} {unit}"
@@ -420,14 +679,18 @@ class NetGuardDashboard(QMainWindow):
 
             value /= 1024
 
-    # --------------------------------------------------
-    # REFRESH DASHBOARD
-    # --------------------------------------------------
+        return "0 B"
+
+    # ==================================================
+    # REFRESH NETWORK DATA
+    # ==================================================
 
     def refresh_dashboard(self):
-
         stats = get_network_stats()
         connections = get_network_connections()
+
+        self.refresh_connections(connections)
+        self.refresh_alerts(connections)
 
         current_time = time.monotonic()
         current_counters = psutil.net_io_counters()
@@ -438,17 +701,14 @@ class NetGuardDashboard(QMainWindow):
             and self.last_sample_time is not None
             and current_counters is not None
         ):
-
             elapsed = current_time - self.last_sample_time
 
             if elapsed > 0:
-
                 sent_delta = max(
                     0,
                     current_counters.bytes_sent
                     - self.previous_stats.bytes_sent,
                 )
-
                 received_delta = max(
                     0,
                     current_counters.bytes_recv
@@ -464,123 +724,166 @@ class NetGuardDashboard(QMainWindow):
         self.last_sample_time = current_time
 
         self.connections_value.setText(str(len(connections)))
-
         self.sent_value.setText(
             self.format_bytes(stats["bytes_sent"])
         )
-
         self.received_value.setText(
             self.format_bytes(stats["bytes_received"])
         )
-
         self.download_value.setText(
             f"{self.download_speed:.1f} KB/s"
         )
-
         self.upload_value.setText(
             f"{self.upload_speed:.1f} KB/s"
         )
 
-        # UPDATE CONNECTION TABLE
-
-        self.table.setRowCount(len(connections))
-
-        for row, connection in enumerate(connections):
-
-            values = [
-                connection["protocol"],
-                connection["local_address"] or "-",
-                connection["remote_address"] or "-",
-                connection["status"] or "-",
-                str(connection["pid"] or "-"),
-            ]
-
-            for column, value in enumerate(values):
-
-                self.table.setItem(
-                    row,
-                    column,
-                    QTableWidgetItem(value),
-                )
-
-        # UPDATE GRAPH
-
         if self.monitoring:
             self.download_history.append(self.download_speed)
             self.upload_history.append(self.upload_speed)
-
-            if not hasattr(self, "sample_count"):
-                self.sample_count = 0
-
             self.sample_count += 1
             self.time_history.append(self.sample_count)
 
-            if len(self.time_history) > 30:
-                self.time_history.popleft()
-
-        self.ax.clear()
-        self.ax.set_facecolor("#111827")
-
-        self.ax.plot(
-            list(self.time_history),
-            list(self.download_history),
-            label="Download",
-        )
-
-        self.ax.plot(
-            list(self.time_history),
-            list(self.upload_history),
-            label="Upload",
-        )
-
-        self.ax.set_title(
-            "Network Traffic",
-            color="#f8fafc",
-            pad=8,
-        )
-
-        self.ax.set_xlabel(
-            "Recent samples",
-            color="#94a3b8",
-        )
-
-        self.ax.set_ylabel(
-            "KB/s",
-            color="#94a3b8",
-        )
-
-        self.ax.tick_params(colors="#94a3b8")
-        self.ax.grid(True, alpha=0.2)
-
-        max_speed = max(
-            max(self.download_history, default=0),
-            max(self.upload_history, default=0),
-        )
-
-        self.ax.set_ylim(
-            0,
-            max(10, max_speed * 1.2),
-        )
-
-        self.ax.legend()
-        self.figure.tight_layout()
-        self.canvas.draw()
+        self.update_graph()
 
         if self.monitoring:
             self.status_label.setText("● MONITORING")
         else:
             self.status_label.setText("● STOPPED")
 
-    # --------------------------------------------------
-    # START MONITORING
-    # --------------------------------------------------
+        self.start_button.setEnabled(not self.monitoring)
+        self.stop_button.setEnabled(self.monitoring)
+
+    def refresh_connections(self, connections):
+        self.table.setRowCount(len(connections))
+
+        for row, connection in enumerate(connections):
+            values = [
+                connection.get("protocol") or "-",
+                connection.get("local_address") or "-",
+                connection.get("remote_address") or "-",
+                connection.get("status") or "-",
+                str(connection.get("pid") or "-"),
+            ]
+
+            for column, value in enumerate(values):
+                self.table.setItem(
+                    row,
+                    column,
+                    QTableWidgetItem(str(value)),
+                )
+
+        self.connection_count_label.setText(
+            f"{len(connections)} connections"
+        )
+
+    def refresh_alerts(self, connections):
+        alerts = detect_suspicious_connections(connections)
+
+        self.alerts_table.setRowCount(len(alerts))
+
+        for row, alert in enumerate(alerts):
+            connection = alert.get("connection", {})
+            details = alert.get("message", "")
+
+            remote_address = connection.get("remote_address")
+            if remote_address:
+                details += f" | Remote: {remote_address}"
+
+            values = [
+                alert.get("timestamp", ""),
+                alert.get("severity", ""),
+                alert.get("rule", ""),
+                details,
+            ]
+
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+
+                if column == 1:
+                    severity = str(alert.get("severity", "")).upper()
+
+                    if severity == "WARNING":
+                        item.setForeground(Qt.GlobalColor.yellow)
+                    elif severity == "HIGH":
+                        item.setForeground(Qt.GlobalColor.red)
+
+                self.alerts_table.setItem(row, column, item)
+
+        self.alert_count_label.setText(
+            f"{len(alerts)} current alerts"
+        )
+
+        if not alerts:
+            self.alert_summary.setText(
+                "No connections currently match the detection rules."
+            )
+        else:
+            self.alert_summary.setText(
+                f"{len(alerts)} connection alert(s) require review. "
+                "Open Security Alerts for details."
+            )
+
+    def update_graph(self):
+        self.ax.clear()
+        self.configure_graph()
+
+        self.ax.plot(
+            list(self.time_history),
+            list(self.download_history),
+            label="Download",
+        )
+        self.ax.plot(
+            list(self.time_history),
+            list(self.upload_history),
+            label="Upload",
+        )
+
+        max_speed = max(
+            max(self.download_history, default=0),
+            max(self.upload_history, default=0),
+        )
+
+        self.ax.set_ylim(0, max(10, max_speed * 1.2))
+        self.ax.legend(facecolor="#111827", labelcolor="#e2e8f0")
+
+        self.figure.tight_layout()
+        self.canvas.draw()
+
+    # ==================================================
+    # SETTINGS
+    # ==================================================
+
+    def apply_settings(self):
+        interval = self.interval_combo.currentData()
+
+        if not isinstance(interval, int):
+            QMessageBox.warning(
+                self,
+                "Invalid setting",
+                "Please select a valid refresh interval.",
+            )
+            return
+
+        self.refresh_interval = interval
+        self.timer.setInterval(interval)
+
+        QMessageBox.information(
+            self,
+            "Settings applied",
+            f"Refresh interval set to {interval // 1000} second(s).",
+        )
+
+    # ==================================================
+    # MONITORING CONTROLS
+    # ==================================================
 
     def start_monitoring(self):
+        if self.monitoring:
+            return
 
         self.monitoring = True
-
         self.previous_stats = psutil.net_io_counters()
-        self.last_sample_time = None
+        self.last_sample_time = time.monotonic()
 
         self.download_speed = 0.0
         self.upload_speed = 0.0
@@ -591,24 +894,20 @@ class NetGuardDashboard(QMainWindow):
         self.sample_count = 0
 
         self.status_label.setText("● MONITORING")
-
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
 
         self.refresh_dashboard()
         self.timer.start()
 
-    # --------------------------------------------------
-    # STOP MONITORING
-    # --------------------------------------------------
-
     def stop_monitoring(self):
-
         self.timer.stop()
         self.monitoring = False
 
-        self.status_label.setText("● STOPPED")
+        self.download_speed = 0.0
+        self.upload_speed = 0.0
 
+        self.status_label.setText("● STOPPED")
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
 
@@ -616,7 +915,6 @@ class NetGuardDashboard(QMainWindow):
 
 
 def main():
-
     app = QApplication(sys.argv)
 
     window = NetGuardDashboard()
