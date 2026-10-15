@@ -74,3 +74,12 @@ def get_recent_alerts(limit=100):
         """, (limit,)).fetchall()
 
         return [dict(row) for row in rows]
+    
+def delete_alert(alert_id):
+    """Delete an alert from the database using its ID."""
+    with get_connection() as connection:
+        cursor = connection.execute(
+            "DELETE FROM alerts WHERE id = ?",
+            (alert_id,),
+        )
+        return cursor.rowcount > 0

@@ -30,7 +30,12 @@ from app.network.monitor import (
     get_network_connections,
 )
 from app.detection.rules import detect_suspicious_connections
-
+from app.storage.database import (
+    initialize_database,
+    save_alert,
+    get_recent_alerts,
+    delete_alert,
+)
 
 class NetGuardDashboard(QMainWindow):
 
@@ -66,6 +71,9 @@ class NetGuardDashboard(QMainWindow):
         self.timer = QTimer(self)
         self.timer.setInterval(self.refresh_interval)
         self.timer.timeout.connect(self.refresh_dashboard)
+
+        self.saved_alert_keys = set()
+        initialize_database()
 
         self.setup_ui()
         self.refresh_dashboard()
@@ -347,6 +355,25 @@ class NetGuardDashboard(QMainWindow):
         description.setWordWrap(True)
 
         layout.addWidget(description)
+        
+                # Alert actions
+        actions_layout = QHBoxLayout()
+
+        test_button = QPushButton("Simulate Test Alert")
+        test_button.setObjectName("startButton")
+        test_button.clicked.connect(self.simulate_test_alert)
+
+        self.delete_alert_button = QPushButton("Delete Selected Alert")
+        self.delete_alert_button.setObjectName("stopButton")
+        self.delete_alert_button.clicked.connect(self.delete_selected_alert)
+
+        actions_layout.addWidget(test_button)
+        actions_layout.addWidget(self.delete_alert_button)
+        actions_layout.addStretch()
+
+        layout.addLayout(actions_layout)
+
+       
 
         self.alerts_table = QTableWidget()
         self.alerts_table.setColumnCount(4)
@@ -776,16 +803,95 @@ class NetGuardDashboard(QMainWindow):
             f"{len(connections)} connections"
         )
 
-    def refresh_alerts(self, connections):
-        alerts = detect_suspicious_connections(connections)
+    def simulate_test_alert(self):
+        """Create a simulated alert to test the Security Alerts interface."""
+        from datetime import datetime
+
+        alert = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "severity": "WARNING",
+            "rule": "TEST - Sensitive remote port",
+            "message": (
+                "Simulated alert: a connection to remote port 23 "
+                "(Telnet) was detected."
+            ),
+            "connection": {
+                "protocol": "TCP",
+                "local_address": "192.168.1.10:51500",
+                "remote_address": "203.0.113.10:23",
+                "status": "ESTABLISHED",
+                "pid": 1234,
+            },
+        }
+
+        save_alert(alert)
+        self.refresh_alerts_from_database()
+
+        QMessageBox.information(
+            self,
+            "Test alert created",
+            "The simulated alert has been saved to the database.",
+        )
+    
+    def delete_selected_alert(self):
+        row = self.alerts_table.currentRow()
+
+        if row < 0:
+            QMessageBox.warning(
+                self,
+                "No alert selected",
+                "Select an alert before deleting it.",
+            )
+            return
+
+        id_item = self.alerts_table.item(row, 0)
+
+        if id_item is None or id_item.data(Qt.ItemDataRole.UserRole) is None:
+            QMessageBox.warning(
+                self,
+                "Unable to delete",
+                "The selected alert has no database ID.",
+            )
+            return
+
+        alert_id = id_item.data(Qt.ItemDataRole.UserRole)
+
+        answer = QMessageBox.question(
+            self,
+            "Confirm deletion",
+            "Are you sure you want to permanently delete this alert?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        if delete_alert(alert_id):
+            self.refresh_alerts_from_database()
+
+            QMessageBox.information(
+                self,
+                "Alert deleted",
+                "The alert has been deleted successfully.",
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                "Deletion failed",
+                "The alert could not be found in the database.",
+            )
+    
+    def refresh_alerts_from_database(self):
+        """Affiche les alertes enregistrées dans la base de données."""
+        alerts = get_recent_alerts()
 
         self.alerts_table.setRowCount(len(alerts))
 
         for row, alert in enumerate(alerts):
-            connection = alert.get("connection", {})
             details = alert.get("message", "")
+            remote_address = alert.get("remote_address")
 
-            remote_address = connection.get("remote_address")
             if remote_address:
                 details += f" | Remote: {remote_address}"
 
@@ -799,6 +905,12 @@ class NetGuardDashboard(QMainWindow):
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
 
+                if column == 0:
+                    item.setData(
+                        Qt.ItemDataRole.UserRole,
+                        alert["id"],
+                    )
+
                 if column == 1:
                     severity = str(alert.get("severity", "")).upper()
 
@@ -810,8 +922,28 @@ class NetGuardDashboard(QMainWindow):
                 self.alerts_table.setItem(row, column, item)
 
         self.alert_count_label.setText(
-            f"{len(alerts)} current alerts"
+            f"{len(alerts)} saved alerts"
         )
+    
+    def refresh_alerts(self, connections):
+        """Détecte les alertes et affiche l'historique enregistré."""
+        alerts = detect_suspicious_connections(connections)
+
+        for alert in alerts:
+            connection = alert.get("connection", {})
+
+            alert_key = (
+                alert.get("rule"),
+                connection.get("local_address"),
+                connection.get("remote_address"),
+                connection.get("pid"),
+            )
+
+            if alert_key not in self.saved_alert_keys:
+                save_alert(alert)
+                self.saved_alert_keys.add(alert_key)
+
+        self.refresh_alerts_from_database()
 
         if not alerts:
             self.alert_summary.setText(
