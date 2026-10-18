@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -385,6 +386,16 @@ class NetGuardDashboard(QMainWindow):
         )
 
         layout.addWidget(self.severity_filter)
+        
+        self.alert_search = QLineEdit()
+        self.alert_search.setPlaceholderText(
+            "Search by IP address, detection rule or message..."
+        )
+        self.alert_search.textChanged.connect(
+            self.refresh_alerts_from_database
+        )
+
+        layout.addWidget(self.alert_search)
 
        
 
@@ -896,9 +907,10 @@ class NetGuardDashboard(QMainWindow):
             )
     
     def refresh_alerts_from_database(self):
-        """Display saved alerts using the selected severity filter."""
+        """Display saved alerts using severity and text filters."""
         alerts = get_recent_alerts()
 
+        # Filter by severity
         selected_severity = self.severity_filter.currentText()
 
         if selected_severity != "All severities":
@@ -907,6 +919,18 @@ class NetGuardDashboard(QMainWindow):
                 if alert.get("severity", "").upper() == selected_severity
             ]
 
+        # Filter by search text
+        search_text = self.alert_search.text().strip().lower()
+
+        if search_text:
+            alerts = [
+                alert for alert in alerts
+                if search_text in str(alert.get("remote_address") or "").lower()
+                or search_text in str(alert.get("rule") or "").lower()
+                or search_text in str(alert.get("message") or "").lower()
+            ]
+
+        # Display filtered alerts
         self.alerts_table.setRowCount(len(alerts))
 
         for row, alert in enumerate(alerts):
@@ -943,7 +967,7 @@ class NetGuardDashboard(QMainWindow):
                 self.alerts_table.setItem(row, column, item)
 
         self.alert_count_label.setText(
-            f"{len(alerts)} saved alerts"
+            f"{len(alerts)} alerts displayed"
         )
     
     def refresh_alerts(self, connections):
