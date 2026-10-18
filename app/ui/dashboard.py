@@ -5,6 +5,7 @@ from collections import deque
 import psutil
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QLineEdit, QComboBox
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -319,6 +320,8 @@ class NetGuardDashboard(QMainWindow):
         description.setWordWrap(True)
 
         layout.addWidget(description)
+        
+        
 
         self.table = QTableWidget()
         self.table.setColumnCount(6)
