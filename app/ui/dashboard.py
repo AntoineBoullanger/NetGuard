@@ -372,6 +372,19 @@ class NetGuardDashboard(QMainWindow):
         actions_layout.addStretch()
 
         layout.addLayout(actions_layout)
+        
+        self.severity_filter = QComboBox()
+        self.severity_filter.addItems([
+            "All severities",
+            "INFO",
+            "WARNING",
+            "HIGH",
+        ])
+        self.severity_filter.currentTextChanged.connect(
+            self.refresh_alerts_from_database
+        )
+
+        layout.addWidget(self.severity_filter)
 
        
 
@@ -883,8 +896,16 @@ class NetGuardDashboard(QMainWindow):
             )
     
     def refresh_alerts_from_database(self):
-        """Affiche les alertes enregistrées dans la base de données."""
+        """Display saved alerts using the selected severity filter."""
         alerts = get_recent_alerts()
+
+        selected_severity = self.severity_filter.currentText()
+
+        if selected_severity != "All severities":
+            alerts = [
+                alert for alert in alerts
+                if alert.get("severity", "").upper() == selected_severity
+            ]
 
         self.alerts_table.setRowCount(len(alerts))
 
