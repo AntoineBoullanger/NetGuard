@@ -321,14 +321,16 @@ class NetGuardDashboard(QMainWindow):
         layout.addWidget(description)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(5)
+        self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels([
+            "Process Name",
             "Protocol",
             "Local Address",
             "Remote Address",
             "Status",
-            "Process ID",
+            "PID",
         ])
+        self.table.setSortingEnabled(True)
 
         self.configure_table(self.table)
         layout.addWidget(self.table)
@@ -811,15 +813,34 @@ class NetGuardDashboard(QMainWindow):
         self.stop_button.setEnabled(self.monitoring)
 
     def refresh_connections(self, connections):
+        """Refresh the connections table with process information."""
+        import psutil
+
         self.table.setRowCount(len(connections))
 
         for row, connection in enumerate(connections):
+            pid = connection.get("pid")
+            process_name = "Unknown"
+
+            if pid:
+                try:
+                    process_name = psutil.Process(int(pid)).name()
+                except (
+                    psutil.NoSuchProcess,
+                    psutil.AccessDenied,
+                    psutil.ZombieProcess,
+                    ValueError,
+                    TypeError,
+                ):
+                    process_name = "Unavailable"
+
             values = [
+                process_name,
                 connection.get("protocol") or "-",
                 connection.get("local_address") or "-",
                 connection.get("remote_address") or "-",
                 connection.get("status") or "-",
-                str(connection.get("pid") or "-"),
+                str(pid or "-"),
             ]
 
             for column, value in enumerate(values):
