@@ -4,6 +4,9 @@ from collections import deque
 
 import psutil
 
+from pathlib import Path
+from PySide6.QtGui import QIcon, QPixmap
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QLineEdit, QComboBox
 from PySide6.QtWidgets import (
@@ -39,6 +42,7 @@ from app.storage.database import (
     get_recent_alerts,
     delete_alert,
 )
+from app.notifications.notifier import NetGuardNotifier
 
 class NetGuardDashboard(QMainWindow):
 
@@ -78,6 +82,8 @@ class NetGuardDashboard(QMainWindow):
         self.saved_alert_keys = set()
         initialize_database()
 
+        self.notifier = NetGuardNotifier(self)
+
         self.setup_ui()
         self.refresh_dashboard()
         self.switch_page("Dashboard")
@@ -104,13 +110,32 @@ class NetGuardDashboard(QMainWindow):
         sidebar_layout.setContentsMargins(18, 25, 18, 20)
         sidebar_layout.setSpacing(12)
 
+       # Logo et nom de l'application
+        logo_path = Path(__file__).resolve().parent.parent / "assets" / "netguard.ico"
+
+        logo_layout = QHBoxLayout()
+        logo_layout.setSpacing(10)
+
+        logo_icon = QLabel()
+        logo_icon.setPixmap(
+            QPixmap(str(logo_path)).scaled(
+                55,
+                55,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+        logo_layout.addWidget(logo_icon)
+
         logo = QLabel("NETGUARD")
         logo.setObjectName("logo")
+        logo_layout.addWidget(logo)
+        logo_layout.addStretch()
+
+        sidebar_layout.addLayout(logo_layout)
 
         subtitle = QLabel("NETWORK SECURITY")
         subtitle.setObjectName("sidebarSubtitle")
-
-        sidebar_layout.addWidget(logo)
         sidebar_layout.addWidget(subtitle)
         sidebar_layout.addSpacing(28)
 
@@ -879,6 +904,11 @@ class NetGuardDashboard(QMainWindow):
         }
 
         save_alert(alert)
+        self.notifier.notify(
+            title="NetGuard - Test",
+            message="Les notifications de sécurité fonctionnent correctement.",
+            severity="INFO",
+        )
         self.refresh_alerts_from_database()
 
         QMessageBox.information(
@@ -1200,6 +1230,15 @@ class NetGuardDashboard(QMainWindow):
                 save_alert(alert)
                 self.saved_alert_keys.add(alert_key)
 
+                self.notifier.notify(
+                    title=f"NetGuard - {alert.get('severity', 'WARNING')}",
+                    message=alert.get(
+                        "message",
+                        "Nouvelle alerte de sécurité détectée."
+                    ),
+                    severity=alert.get("severity", "WARNING"),
+                )
+
         self.refresh_alerts_from_database()
 
         if not alerts:
@@ -1305,10 +1344,17 @@ class NetGuardDashboard(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-
+    
+    app.setApplicationName("NetGuard")
+    app.setApplicationDisplayName("NetGuard")
+    
     window = NetGuardDashboard()
-    window.show()
 
+    icon_path = Path(__file__).resolve().parent.parent / "assets" / "netguard.ico"
+    app.setWindowIcon(QIcon(str(icon_path)))
+    window.setWindowIcon(QIcon(str(icon_path)))
+
+    window.show()
     sys.exit(app.exec())
 
 
