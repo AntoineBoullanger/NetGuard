@@ -406,6 +406,7 @@ class NetGuardDashboard(QMainWindow):
 
         self.alerts_table = QTableWidget()
         self.alerts_table.setColumnCount(4)
+        self.alerts_table.cellDoubleClicked.connect(self.show_alert_details)
         self.alerts_table.setHorizontalHeaderLabels([
             "Time",
             "Severity",
@@ -910,6 +911,114 @@ class NetGuardDashboard(QMainWindow):
                 "Deletion failed",
                 "The alert could not be found in the database.",
             )
+        
+    def show_alert_details(self, row, column):
+        """Display detailed information about a selected alert."""
+        from PySide6.QtWidgets import QDialog, QFormLayout
+
+        timestamp_item = self.alerts_table.item(row, 0)
+
+        if timestamp_item is None:
+            return
+
+        alert_id = timestamp_item.data(Qt.ItemDataRole.UserRole)
+
+        if alert_id is None:
+            return
+
+        alerts = get_recent_alerts()
+        alert = next(
+            (item for item in alerts if item.get("id") == alert_id),
+            None,
+        )
+
+        if alert is None:
+            QMessageBox.warning(
+                self,
+                "Alert not found",
+                "This alert no longer exists in the database.",
+            )
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Alert Details")
+        dialog.resize(550, 300)
+
+        details_layout = QFormLayout(dialog)
+
+        details_layout.addRow(
+            "ID:",
+            QLabel(str(alert.get("id", ""))),
+        )
+        details_layout.addRow(
+            "Timestamp:",
+            QLabel(str(alert.get("timestamp", ""))),
+        )
+        details_layout.addRow(
+            "Severity:",
+            QLabel(str(alert.get("severity", ""))),
+        )
+        details_layout.addRow(
+            "Detection Rule:",
+            QLabel(str(alert.get("rule", ""))),
+        )
+        details_layout.addRow(
+            "Message:",
+            QLabel(str(alert.get("message", ""))),
+        )
+        details_layout.addRow(
+            "Remote Address:",
+            QLabel(str(alert.get("remote_address") or "Unknown")),
+        )
+        # Retrieve process information
+        import psutil
+
+        pid = alert.get("pid")
+        process_name = "Unavailable"
+        process_path = "Unavailable"
+
+        if pid:
+            try:
+                process = psutil.Process(int(pid))
+
+                try:
+                    process_name = process.name()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    process_name = "Access denied or process ended"
+
+                try:
+                    process_path = process.exe()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    process_path = "Path unavailable"
+
+            except (ValueError, TypeError):
+                process_name = "Invalid PID"
+                process_path = "Unavailable"
+            except psutil.NoSuchProcess:
+                process_name = "Process no longer exists"
+                process_path = "Unavailable"
+            except psutil.AccessDenied:
+                process_name = "Access denied"
+                process_path = "Access denied"
+        else:
+            process_name = "No PID recorded"
+
+        details_layout.addRow(
+            "Process Name:",
+            QLabel(process_name),
+        )
+
+        details_layout.addRow(
+            "Process ID (PID):",
+            QLabel(str(pid) if pid else "Unknown"),
+        )
+
+        details_layout.addRow(
+            "Executable Path:",
+            QLabel(process_path),
+        )
+
+        dialog.exec()   
             
     def export_alerts_to_csv(self):
         """Export saved alerts to a CSV file."""
