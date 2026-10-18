@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDateEdit,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -357,7 +358,7 @@ class NetGuardDashboard(QMainWindow):
 
         layout.addWidget(description)
         
-                # Alert actions
+        # Alert actions
         actions_layout = QHBoxLayout()
 
         test_button = QPushButton("Simulate Test Alert")
@@ -370,6 +371,10 @@ class NetGuardDashboard(QMainWindow):
 
         actions_layout.addWidget(test_button)
         actions_layout.addWidget(self.delete_alert_button)
+        
+        export_button = QPushButton("Export Alerts to CSV")
+        export_button.clicked.connect(self.export_alerts_to_csv)
+        actions_layout.addWidget(export_button)
         actions_layout.addStretch()
 
         layout.addLayout(actions_layout)
@@ -904,6 +909,79 @@ class NetGuardDashboard(QMainWindow):
                 self,
                 "Deletion failed",
                 "The alert could not be found in the database.",
+            )
+            
+    def export_alerts_to_csv(self):
+        """Export saved alerts to a CSV file."""
+        import csv
+
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Security Alerts",
+            "netguard_alerts.csv",
+            "CSV Files (*.csv)",
+        )
+
+        if not file_path:
+            return
+
+        alerts = get_recent_alerts()
+
+        selected_severity = self.severity_filter.currentText()
+        search_text = self.alert_search.text().strip().lower()
+
+        if selected_severity != "All severities":
+            alerts = [
+                alert for alert in alerts
+                if alert.get("severity", "").upper() == selected_severity
+            ]
+
+        if search_text:
+            alerts = [
+                alert for alert in alerts
+                if search_text in str(alert.get("remote_address") or "").lower()
+                or search_text in str(alert.get("rule") or "").lower()
+                or search_text in str(alert.get("message") or "").lower()
+            ]
+
+        try:
+            with open(file_path, "w", newline="", encoding="utf-8-sig") as csv_file:
+                writer = csv.writer(csv_file, delimiter=";")
+
+                writer.writerow([
+                    "ID",
+                    "Timestamp",
+                    "Severity",
+                    "Detection Rule",
+                    "Message",
+                    "Remote Address",
+                    "PID",
+                ])
+
+                for alert in alerts:
+                    writer.writerow([
+                        alert.get("id", ""),
+                        alert.get("timestamp", ""),
+                        alert.get("severity", ""),
+                        alert.get("rule", ""),
+                        alert.get("message", ""),
+                        alert.get("remote_address", ""),
+                        alert.get("pid", ""),
+                    ])
+
+            QMessageBox.information(
+                self,
+                "Export successful",
+                f"{len(alerts)} alert(s) exported to:\n{file_path}",
+            )
+
+        except OSError as error:
+            QMessageBox.critical(
+                self,
+                "Export failed",
+                f"Could not export alerts:\n{error}",
             )
     
     def refresh_alerts_from_database(self):
