@@ -1182,7 +1182,8 @@ class NetGuardDashboard(QMainWindow):
         )
     
     def refresh_alerts(self, connections):
-        """Détecte les alertes et affiche l'historique enregistré."""
+        """Detect alerts and avoid saving duplicates."""
+
         alerts = detect_suspicious_connections(connections)
 
         for alert in alerts:
